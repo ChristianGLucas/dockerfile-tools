@@ -80,4 +80,25 @@ describe('ParseDockerfile', () => {
     const b = parseDockerfile(testContext, input);
     expect(a.toObject()).toEqual(b.toObject());
   });
+
+  // Regression for a review finding: toInstructionMsg() reports each
+  // instruction's text three times (raw, arguments, argument_list), so a
+  // single-token instruction at the input bound can amplify the response
+  // to roughly 3x the input size — an earlier MAX_CONTENT_BYTES (2 MB)
+  // produced a >4 MiB serialized response that Axiom's ~4 MiB gRPC
+  // transport cap rejects outright (a 502 on a well-formed, non-malformed
+  // Dockerfile). This asserts the WORST-CASE amplification shape — one
+  // huge whitespace-free single-line instruction at the max allowed input
+  // size — stays safely under that transport cap.
+  it('keeps the worst-case (largest allowed, single giant token) response comfortably under the 4 MiB gRPC transport cap', () => {
+    const AXIOM_GRPC_TRANSPORT_CAP_BYTES = 4 * 1024 * 1024;
+    const input = new DockerfileInput();
+    // One instruction, no whitespace in its argument, at exactly the max
+    // allowed content size — the shape that maximizes raw+arguments+argument_list duplication.
+    input.setContent('RUN ' + 'x'.repeat(MAX_CONTENT_BYTES - 4));
+    const result = parseDockerfile(testContext, input);
+    expect(result.getError()).toBe(''); // within bounds — must actually parse, not reject
+    const serializedSize = result.serializeBinary().length;
+    expect(serializedSize).toBeLessThan(AXIOM_GRPC_TRANSPORT_CAP_BYTES * 0.9); // comfortable margin
+  });
 });

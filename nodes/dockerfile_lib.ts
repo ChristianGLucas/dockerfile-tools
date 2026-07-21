@@ -14,7 +14,20 @@ import { Instruction as InstructionMsg, Issue as IssueMsg } from '../gen/message
 // limit of its own, so every node bounds it before doing any work: a
 // pathological multi-hundred-MB or multi-million-line string is rejected
 // deterministically instead of being handed to the parser.
-export const MAX_CONTENT_BYTES = 2_000_000; // 2 MB — generous for any real Dockerfile
+//
+// This bound also has to protect the OUTPUT side, not just guard against a
+// slow parse: toInstructionMsg() below reports each instruction's text
+// three times (raw, arguments, and — in the worst case of one huge
+// whitespace-free token — argument_list), so the response can be roughly
+// 3x the input size before JSON escaping overhead on top of that. An
+// independent review (2026-07-21) found a well-formed, non-malformed
+// single-instruction Dockerfile at ~1.4 MB producing a >4 MiB response
+// that Axiom's gRPC transport cap (~4 MiB) rejected outright — a 502, not
+// the structured result this package promises. 800 KB keeps worst-case
+// amplification (~3x content + escaping overhead) comfortably under that
+// transport cap while remaining enormously generous for any real
+// Dockerfile, which is virtually always a few KB.
+export const MAX_CONTENT_BYTES = 800_000; // 800 KB
 export const MAX_LINES = 20_000;
 
 /**

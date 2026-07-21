@@ -14,7 +14,7 @@ description: >-
   extraction, COPY/ADD source-destination-flag parsing, the effective final
   CMD/ENTRYPOINT (exec vs. shell form), the effective HEALTHCHECK, an
   instruction-count summary, and basic structural validation with line
-  numbers. Input is bounded (2 MB / 20,000 lines); a malformed Dockerfile
+  numbers. Input is bounded (800 KB / 20,000 lines); a malformed Dockerfile
   always yields a structured result, never a crash.
 license: MIT
 author: Christian George Lucas

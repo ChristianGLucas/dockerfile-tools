@@ -8,7 +8,7 @@ official Docker VS Code extension — pure JavaScript/TypeScript, zero native de
 
 Every node is a pure, stateless transform: a Dockerfile is always supplied as text by the caller.
 There is no network access, no filesystem access, no image builds, and no reliance on wall-clock
-time or randomness. Input is bounded (2 MB / 20,000 lines) and a malformed Dockerfile always
+time or randomness. Input is bounded (800 KB / 20,000 lines) and a malformed Dockerfile always
 yields a structured result — never a crash.
 
 ## Nodes
