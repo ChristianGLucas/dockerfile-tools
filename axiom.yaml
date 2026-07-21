@@ -1,0 +1,162 @@
+name: christiangeorgelucas/dockerfile-tools
+version: 0.1.0
+language: typescript
+description: >-
+  Deterministic parsing and structural inspection of Dockerfiles /
+  Containerfiles, wrapping dockerfile-ast (MIT, rcjsuen/dockerfile-ast — the
+  parser behind the official Docker VS Code extension). The Dockerfile is
+  always supplied as text by the caller: no network, no filesystem, no image
+  builds, no wall-clock, no randomness. Covers the instruction-inspection
+  surface broadly — full structured parse (every instruction/comment/parser
+  directive with line ranges), filter by instruction type, base-image and
+  multi-stage-build extraction (with stage-to-stage FROM references resolved
+  to their real external image), EXPOSE/ENV/ARG/LABEL/VOLUME/WORKDIR/USER
+  extraction, COPY/ADD source-destination-flag parsing, the effective final
+  CMD/ENTRYPOINT (exec vs. shell form), the effective HEALTHCHECK, an
+  instruction-count summary, and basic structural validation with line
+  numbers. Input is bounded (2 MB / 20,000 lines); a malformed Dockerfile
+  always yields a structured result, never a crash.
+license: MIT
+author: Christian George Lucas
+tags:
+  - dockerfile
+  - containerfile
+  - docker
+  - parsing
+  - static-analysis
+  - devops
+  - ci-cd
+  - dockerfile-ast
+nodes:
+    - name: ParseDockerfile
+      input: DockerfileInput
+      output: ParsedDockerfile
+      description: >-
+        Parse a Dockerfile into its full structured, ordered content: every
+        instruction (keyword, raw and tokenized arguments, raw source text,
+        1-based line range, owning build-stage index), every comment, and
+        every parser directive (# syntax=, # escape=), all in source order.
+        The general-purpose parse every other node in this package is a
+        specialized view of.
+    - name: ListInstructionsByType
+      input: ListInstructionsByTypeInput
+      output: InstructionList
+      description: >-
+        List every instruction of one keyword (e.g. "RUN", "COPY", "ENV"),
+        case-insensitively matched, in source order. Useful for keywords
+        this package has no dedicated Extract* node for (SHELL, STOPSIGNAL,
+        ONBUILD, MAINTAINER) or when the raw instruction list is all that's
+        needed.
+    - name: ExtractBaseImages
+      input: DockerfileInput
+      output: BaseImageList
+      description: >-
+        Extract every FROM instruction's parsed base-image reference: raw
+        text, repository, tag, digest, --platform flag, the stage's own "AS
+        <name>" alias, and its 0-based stage index — one entry per build
+        stage, in source order.
+    - name: ExtractStages
+      input: DockerfileInput
+      output: StageList
+      description: >-
+        Extract the build stages of a (possibly single-stage) Dockerfile:
+        one entry per FROM with its index, alias, base image, whether that
+        base is external or a reference to an earlier stage, and how many
+        instructions belong to it. is_multi_stage is true iff more than one
+        FROM is present.
+    - name: ExtractExposedPorts
+      input: DockerfileInput
+      output: PortList
+      description: >-
+        Extract every port named across all EXPOSE instructions: numeric
+        port, protocol (default tcp), and the raw token. A token naming a
+        build variable rather than a literal number is reported unresolved
+        (port=0) rather than guessed at.
+    - name: ExtractEnvVars
+      input: DockerfileInput
+      output: EnvVarList
+      description: >-
+        Extract every ENV key/value pair, in source order. A multi-pair
+        instruction (ENV a=1 b=2) expands to one entry per pair; the legacy
+        single-pair form (ENV KEY value) yields one entry.
+    - name: ExtractArgs
+      input: DockerfileInput
+      output: ArgList
+      description: >-
+        Extract every ARG declaration (name, default value, whether a
+        default was given), in source order, including ARGs declared before
+        the first FROM.
+    - name: ExtractCopyAndAdd
+      input: DockerfileInput
+      output: CopyInstructionList
+      description: >-
+        Extract every COPY and ADD instruction: source paths/URLs/globs,
+        destination, and the --from (build-stage source, COPY only),
+        --chown, --chmod, and --link modifiers, in source order.
+    - name: ExtractEntrypointAndCmd
+      input: DockerfileInput
+      output: EntrypointCmd
+      description: >-
+        Extract the FINAL effective CMD and ENTRYPOINT — the last
+        occurrence of each in source order, which is what Docker actually
+        uses for the final image. Reports both the JSON-array (exec) form
+        and the shell-string form.
+    - name: ExtractLabels
+      input: DockerfileInput
+      output: LabelList
+      description: >-
+        Extract every LABEL key/value pair, in source order. A single
+        instruction may set multiple labels at once; each expands to its
+        own entry.
+    - name: ExtractVolumes
+      input: DockerfileInput
+      output: VolumeList
+      description: >-
+        Extract every VOLUME instruction's declared paths, in source order.
+        Handles both the JSON-array form and the space-separated shell
+        form.
+    - name: ExtractWorkdirs
+      input: DockerfileInput
+      output: WorkdirList
+      description: >-
+        Extract every WORKDIR instruction's path, in source order, plus
+        final_workdir — the path from the last WORKDIR in the whole file.
+    - name: ExtractUsers
+      input: DockerfileInput
+      output: UserList
+      description: >-
+        Extract every USER instruction, splitting the user[:group]
+        argument, plus final_user/final_group — the user the final image
+        actually runs as.
+    - name: ExtractHealthcheck
+      input: DockerfileInput
+      output: HealthcheckInfo
+      description: >-
+        Extract the single effective HEALTHCHECK — the last HEALTHCHECK
+        instruction in source order, since later ones override earlier
+        ones entirely. Distinguishes an explicit "HEALTHCHECK NONE" from no
+        HEALTHCHECK at all.
+    - name: ResolveStageBaseImage
+      input: ResolveStageBaseImageInput
+      output: ResolvedBaseImage
+      description: >-
+        Resolve a named or indexed build stage to the real external base
+        image that ultimately backs it, walking any chain of "FROM
+        <earlier-stage>" references in a multi-stage build.
+    - name: SummarizeDockerfile
+      input: DockerfileInput
+      output: DockerfileSummary
+      description: >-
+        Summarize a Dockerfile's structure: total instruction count, line
+        count, stage count / multi-stage flag, an instruction-type
+        histogram, whether an active HEALTHCHECK exists, and the total
+        number of EXPOSE'd ports.
+    - name: ValidateDockerfile
+      input: DockerfileInput
+      output: ValidationResult
+      description: >-
+        Run a basic structural-correctness pass and report issues with
+        1-based line numbers: at least one FROM must be present, the first
+        instruction must be ARG or FROM, only ARG is allowed before the
+        first FROM, and every instruction keyword is one Docker actually
+        recognizes.

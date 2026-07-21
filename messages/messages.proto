@@ -1,0 +1,316 @@
+// This file defines the data contracts (messages) for your Axiom package.
+// Every node's --input and --output refers to a message defined here.
+//
+// Run `axiom create message <Name>` to scaffold a new message below.
+// Run `axiom generate` to compile these definitions into language bindings in gen/.
+//
+// DOCUMENTATION
+//   Comments written directly above a message or field declaration are extracted
+//   automatically at publish time and shown in the Axiom registry as documentation.
+//   Write your descriptions there — no separate doc files needed.
+//
+//   Leading comment  (no blank line before the declaration) → registry description ✓
+//   Detached comment (blank line before the declaration)    → ignored by registry  ✗
+//
+// This file is yours to edit. Axiom only appends new message blocks — it never
+// overwrites or removes content you have written.
+
+syntax = "proto3";
+
+package christiangeorgelucas.dockerfile_tools;
+
+// The canonical input for every node that reads a whole Dockerfile: the raw
+// text content, verbatim (any DOS/Unix line endings, any `# syntax=` /
+// `# escape=` parser directives included as part of the text itself).
+message DockerfileInput {
+  string content = 1; // Full Dockerfile/Containerfile text, as the caller has it on disk.
+}
+
+// A single structural or syntax issue found while parsing or validating a
+// Dockerfile. Never fatal on its own — a best-effort parse reports issues
+// instead of throwing, so callers can decide what "usable" means for them.
+message Issue {
+  int32  line     = 1; // 1-based line number the issue applies to (0 if not line-specific).
+  int32  column   = 2; // 1-based column, when known (0 otherwise).
+  string severity = 3; // "error" | "warning".
+  string message  = 4; // Human-readable description of the issue.
+}
+
+// One parsed Dockerfile instruction (FROM, RUN, COPY, ...), preserving its
+// raw source text alongside the parsed keyword/arguments split, and the
+// line range it spans (an instruction can continue across lines via `\`).
+message Instruction {
+  string keyword         = 1; // Upper-cased instruction keyword, e.g. "RUN", "COPY", "FROM".
+  string arguments       = 2; // Everything after the keyword, as one raw string (whitespace-trimmed).
+  repeated string argument_list = 3; // arguments, whitespace-tokenized (JSON-array RUN/CMD/ENTRYPOINT forms are expanded to their elements).
+  string raw             = 4; // The full source text of the instruction, including line-continuations, verbatim.
+  int32  start_line      = 5; // 1-based line the instruction starts on.
+  int32  end_line        = 6; // 1-based line the instruction ends on (== start_line unless continued with `\`).
+  int32  stage_index     = 7; // 0-based index of the build stage this instruction belongs to (0 if the Dockerfile has no explicit multi-stage FROMs before it).
+}
+
+// A `#`-prefixed comment line, in source order.
+message Comment {
+  string text = 1; // Comment text with the leading "#" stripped and surrounding whitespace trimmed.
+  int32  line = 2; // 1-based line number.
+}
+
+// A parser directive (`# syntax=...` / `# escape=...`), which must appear
+// before any other content to take effect.
+message ParserDirective {
+  string name  = 1; // "syntax" | "escape".
+  string value = 2; // The directive's value, verbatim.
+  int32  line  = 3; // 1-based line number.
+}
+
+// The full structural parse of a Dockerfile: every instruction, comment, and
+// parser directive, in source order, plus any issues hit along the way.
+// A best-effort parse — issues does not stop instructions from being reported.
+message ParsedDockerfile {
+  repeated Instruction      instructions      = 1;
+  repeated Comment          comments          = 2;
+  repeated ParserDirective  directives        = 3;
+  string                    escape_character  = 4; // The effective escape character ("\" unless a `# escape=` directive overrides it).
+  repeated Issue            issues            = 5; // Best-effort parse issues; empty on a clean parse.
+  string                    error             = 6; // Set only when the input could not be processed at all (e.g. over the size cap); instructions/comments/directives are empty in that case.
+}
+
+// Input for ListInstructionsByType: a Dockerfile plus the instruction
+// keyword to filter to (case-insensitive, e.g. "run", "RUN", "Run" all match).
+message ListInstructionsByTypeInput {
+  string content = 1;
+  string keyword = 2; // Instruction keyword to filter to, e.g. "RUN", "COPY", "ENV".
+}
+
+// All instructions of one keyword, in source order.
+message InstructionList {
+  repeated Instruction instructions = 1;
+  int32                count        = 2;
+  string               error        = 3;
+}
+
+// One FROM instruction's parsed image reference.
+message BaseImage {
+  string raw          = 1; // The full image reference as written, e.g. "node:18-alpine@sha256:abcd...".
+  string repository   = 2; // e.g. "node", "docker.io/library/node", or the referenced stage's name when the owning Stage's base_is_stage_ref is true.
+  string tag          = 3; // e.g. "18-alpine"; empty if no tag was given (implies "latest").
+  string digest       = 4; // e.g. "sha256:abcd..."; empty if no digest was pinned.
+  string platform     = 5; // Value of a `--platform=` flag, if present; empty otherwise.
+  string stage_alias  = 6; // The name after "AS <name>", if present; empty otherwise.
+  int32  stage_index  = 7; // 0-based index of the stage this FROM introduces.
+  int32  line         = 8; // 1-based source line.
+}
+
+// All FROM instructions (one per build stage) found in the Dockerfile.
+message BaseImageList {
+  repeated BaseImage images = 1;
+  string             error  = 2;
+}
+
+// One build stage of a (possibly single-stage) Dockerfile.
+message Stage {
+  int32  index              = 1; // 0-based stage index, in source order.
+  string name                = 2; // The stage's "AS <name>" alias; empty if unnamed.
+  string base_image          = 3; // Raw image reference (base_is_stage_ref=false), or the referenced stage's name (base_is_stage_ref=true).
+  bool   base_is_stage_ref   = 4; // True when this stage's FROM refers to an earlier stage by name/index rather than an external image.
+  int32  base_stage_index    = 5; // When base_is_stage_ref is true: the referenced stage's index; -1 otherwise or if unresolved.
+  string platform            = 6; // Value of a `--platform=` flag on this stage's FROM, if present.
+  int32  from_line           = 7; // 1-based line of this stage's FROM instruction.
+  int32  instruction_count   = 8; // Number of instructions belonging to this stage (including its own FROM).
+}
+
+// Every build stage, in source order, with whether the Dockerfile is
+// multi-stage (more than one FROM).
+message StageList {
+  repeated Stage stages         = 1;
+  bool           is_multi_stage = 2;
+  int32          stage_count    = 3;
+  string         error          = 4;
+}
+
+// One EXPOSE'd port.
+message Port {
+  int32  port     = 1; // The numeric port, or 0 when unresolved (see resolved).
+  string protocol = 2; // "tcp" (default) or "udp".
+  string raw      = 3; // The raw token as written, e.g. "8080/tcp" or "$PORT".
+  bool   resolved = 4; // False when the token could not be parsed as a literal port (e.g. it names a build variable) — port is 0 in that case, raw still carries the original text.
+  int32  line     = 5;
+}
+
+message PortList {
+  repeated Port ports = 1;
+  string        error = 2;
+}
+
+// One ENV key/value pair. Multi-pair `ENV a=1 b=2` instructions expand to
+// one EnvVar per pair; the legacy `ENV key value` form yields one.
+message EnvVar {
+  string key   = 1;
+  string value = 2;
+  int32  line  = 3;
+}
+
+message EnvVarList {
+  repeated EnvVar vars  = 1;
+  string          error = 2;
+}
+
+// One ARG declaration.
+message Arg {
+  string name          = 1;
+  string default_value = 2; // Empty when has_default is false.
+  bool   has_default   = 3;
+  int32  line          = 4;
+}
+
+message ArgList {
+  repeated Arg args  = 1;
+  string      error  = 2;
+}
+
+// One COPY or ADD instruction.
+message CopyInstruction {
+  string          keyword     = 1; // "COPY" or "ADD".
+  repeated string sources     = 2; // All source paths/URLs/globs (every argument but the last).
+  string          destination = 3; // The final argument.
+  string          from_stage  = 4; // Value of `--from=`, if present (a stage name/index or external image); empty otherwise.
+  string          chown       = 5; // Value of `--chown=`, if present.
+  string          chmod       = 6; // Value of `--chmod=`, if present.
+  bool            link        = 7; // True if `--link` was set.
+  string          raw         = 8;
+  int32           line        = 9;
+}
+
+message CopyInstructionList {
+  repeated CopyInstruction instructions = 1;
+  string                   error        = 2;
+}
+
+// The final effective CMD and ENTRYPOINT for the Dockerfile (the LAST
+// occurrence of each in source order — what actually takes effect at
+// container start for the final stage).
+message EntrypointCmd {
+  bool            has_cmd             = 1;
+  bool            cmd_exec_form       = 2; // True for JSON-array ["executable","arg"] form; false for shell-string form.
+  repeated string cmd_args            = 3; // Elements, whether from exec-form array or a whitespace split of the shell-form string.
+  string          cmd_shell_string    = 4; // The raw shell-form string; empty when cmd_exec_form is true.
+  int32           cmd_line            = 5;
+
+  bool            has_entrypoint            = 6;
+  bool            entrypoint_exec_form      = 7;
+  repeated string entrypoint_args           = 8;
+  string          entrypoint_shell_string   = 9;
+  int32           entrypoint_line           = 10;
+
+  string          error = 11;
+}
+
+// One LABEL key/value pair.
+message Label {
+  string key   = 1;
+  string value = 2;
+  int32  line  = 3;
+}
+
+message LabelList {
+  repeated Label labels = 1;
+  string         error  = 2;
+}
+
+// One VOLUME instruction (may declare multiple paths at once).
+message VolumeDecl {
+  repeated string paths = 1;
+  string          raw   = 2;
+  int32           line  = 3;
+}
+
+message VolumeList {
+  repeated VolumeDecl volumes = 1;
+  string               error   = 2;
+}
+
+// One WORKDIR instruction.
+message Workdir {
+  string path = 1;
+  int32  line = 2;
+}
+
+message WorkdirList {
+  repeated Workdir workdirs      = 1;
+  string           final_workdir = 2; // The path from the LAST WORKDIR instruction; empty if none.
+  string           error         = 3;
+}
+
+// One USER instruction.
+message UserDecl {
+  string user  = 1;
+  string group = 2; // Empty if no ":group" was given.
+  string raw   = 3;
+  int32  line  = 4;
+}
+
+message UserList {
+  repeated UserDecl users       = 1;
+  string            final_user  = 2; // user from the LAST USER instruction; empty if none.
+  string            final_group = 3;
+  string            error       = 4;
+}
+
+// The single effective HEALTHCHECK for the Dockerfile (the LAST occurrence
+// in source order — HEALTHCHECK instructions override each other).
+message HealthcheckInfo {
+  bool            present       = 1; // False if no HEALTHCHECK instruction exists at all.
+  bool            is_none       = 2; // True if the last HEALTHCHECK is explicitly "HEALTHCHECK NONE" (disables any inherited healthcheck).
+  string          test_type     = 3; // "CMD" | "CMD-SHELL" | "" (empty when is_none or not present).
+  repeated string command       = 4; // Parsed command elements.
+  string          interval      = 5; // Raw value of --interval, e.g. "30s"; empty if default.
+  string          timeout       = 6;
+  string          start_period  = 7;
+  string          retries       = 8; // Raw value of --retries; empty if default.
+  int32           line          = 9;
+  string          error         = 10;
+}
+
+// Input for ResolveStageBaseImage: a Dockerfile plus which stage to resolve
+// (by name if it has an "AS <name>" alias, otherwise its 0-based index as a
+// decimal string, e.g. "0").
+message ResolveStageBaseImageInput {
+  string content = 1;
+  string stage   = 2; // Stage name (preferred) or 0-based index as a string.
+}
+
+// The fully-resolved external base image for a named/indexed stage, walking
+// any chain of "FROM <earlier-stage>" references to the external image that
+// ultimately backs it.
+message ResolvedBaseImage {
+  bool            found             = 1; // False if the requested stage does not exist.
+  string          resolved_image    = 2; // The final external image reference (empty if found is false).
+  repeated string resolution_chain  = 3; // Stage names/indices walked to reach resolved_image, starting with the requested stage.
+  bool            is_external       = 4; // True once resolved_image names a real external image rather than an unresolved reference.
+  string          error             = 5;
+}
+
+// One (keyword, count) pair in an instruction-type histogram.
+message InstructionCount {
+  string keyword = 1;
+  int32  count   = 2;
+}
+
+// A structural summary of the whole Dockerfile.
+message DockerfileSummary {
+  int32                     total_instructions  = 1;
+  int32                     line_count          = 2;
+  int32                     stage_count         = 3;
+  bool                      is_multi_stage      = 4;
+  repeated InstructionCount instruction_counts  = 5; // One entry per distinct keyword present, in descending count order.
+  bool                      has_healthcheck     = 6; // True if any (non-NONE) HEALTHCHECK exists.
+  int32                     exposed_port_count  = 7;
+  string                    error               = 8;
+}
+
+// The result of a structural-correctness pass over the Dockerfile.
+message ValidationResult {
+  bool           valid  = 1; // True iff issues contains no "error"-severity entry.
+  repeated Issue issues = 2;
+  string         error  = 3; // Set only when the input could not be processed at all (e.g. over the size cap).
+}
