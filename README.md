@@ -1,7 +1,7 @@
 # dockerfile-tools
 
 Deterministic parsing and structural inspection of Dockerfiles / Containerfiles for the
-[Axiom](https://axiom.co) marketplace, published under the `christiangeorgelucas` handle.
+[Axiom](https://axiomide.com) marketplace, published under the `christiangeorgelucas` handle.
 
 Wraps [`dockerfile-ast`](https://github.com/rcjsuen/dockerfile-ast) (MIT), the parser behind the
 official Docker VS Code extension — pure JavaScript/TypeScript, zero native dependencies.
