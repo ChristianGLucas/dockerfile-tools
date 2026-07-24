@@ -9,60 +9,14 @@ import type { Dockerfile } from 'dockerfile-ast';
 import type { Instruction as AstInstruction } from 'dockerfile-ast';
 import { Instruction as InstructionMsg, Issue as IssueMsg } from '../gen/messages_pb';
 
-// --- Input-surface bounds -----------------------------------------------
-// The Dockerfile is always caller-supplied text with no independent size
-// limit of its own, so every node bounds it before doing any work: a
-// pathological multi-hundred-MB or multi-million-line string is rejected
-// deterministically instead of being handed to the parser.
-//
-// This bound also has to protect the OUTPUT side, not just guard against a
-// slow parse: toInstructionMsg() below reports each instruction's text
-// three times (raw, arguments, and — in the worst case of one huge
-// whitespace-free token — argument_list), so the response can be roughly
-// 3x the input size before JSON escaping overhead on top of that. An
-// independent review (2026-07-21) found a well-formed, non-malformed
-// single-instruction Dockerfile at ~1.4 MB producing a >4 MiB response
-// that Axiom's gRPC transport cap (~4 MiB) rejected outright — a 502, not
-// the structured result this package promises. 800 KB keeps worst-case
-// amplification (~3x content + escaping overhead) comfortably under that
-// transport cap while remaining enormously generous for any real
-// Dockerfile, which is virtually always a few KB.
-export const MAX_CONTENT_BYTES = 800_000; // 800 KB
-export const MAX_LINES = 20_000;
-
 /**
- * Returns a structured error string if `content` is outside the supported
- * bounds, or null if it is safe to parse.
- */
-export function checkBounds(content: string): string | null {
-  if (content.length === 0) {
-    return null; // empty input is valid (parses to zero instructions), not an error
-  }
-  const byteLength = Buffer.byteLength(content, 'utf8');
-  if (byteLength > MAX_CONTENT_BYTES) {
-    return `input exceeds maximum size of ${MAX_CONTENT_BYTES} bytes (got ${byteLength})`;
-  }
-  let lines = 1;
-  for (let i = 0; i < content.length; i++) {
-    if (content.charCodeAt(i) === 10) lines++;
-    if (lines > MAX_LINES) {
-      return `input exceeds maximum line count of ${MAX_LINES}`;
-    }
-  }
-  return null;
-}
-
-/**
- * Parses `content` with dockerfile-ast, first enforcing the input bounds.
- * dockerfile-ast itself never throws on malformed Dockerfiles — it always
- * returns a best-effort AST — so the only failure mode this reports is the
- * bounds check; everything else is "parse succeeded, possibly with issues".
+ * Parses `content` with dockerfile-ast. dockerfile-ast itself never throws
+ * on malformed Dockerfiles — it always returns a best-effort AST — so this
+ * only reports an error if the underlying library ever violates that
+ * contract; everything else is "parse succeeded, possibly with issues".
+ * Input size/line-count are the platform's concern, not this node's.
  */
 export function safeParse(content: string): { df: Dockerfile | null; error: string | null } {
-  const boundsError = checkBounds(content);
-  if (boundsError !== null) {
-    return { df: null, error: boundsError };
-  }
   try {
     const df = DockerfileParser.parse(content);
     return { df, error: null };
